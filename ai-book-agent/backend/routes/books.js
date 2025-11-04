@@ -1,7 +1,11 @@
 import express from "express";
 import { supabase } from "../utils/supabase.js";
+import { authenticateUser } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// All book routes require authentication
+router.use(authenticateUser);
 
 // Create a new book
 router.post("/", async (req, res) => {

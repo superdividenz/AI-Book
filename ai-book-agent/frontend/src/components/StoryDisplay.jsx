@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-export default function StoryDisplay() {
+export default function StoryDisplay({ accessToken, user, onLogout }) {
   const [story, setStory] = useState("");
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -10,18 +10,41 @@ export default function StoryDisplay() {
 
   const API_BASE = "http://localhost:5050";
 
+  const getAuthHeaders = () => ({
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${accessToken}`,
+  });
+
   const handleCreateBook = async () => {
     if (!bookTitle.trim() || isLoading) return;
     try {
       setIsLoading(true);
       const res = await fetch(`${API_BASE}/api/books`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ title: bookTitle.trim() }),
       });
+      
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      // Check if response is JSON before parsing
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
+
       const data = await res.json();
       if (data.book?.id) {
         setBookId(data.book.id);
+      }
+    } catch (err) {
+      console.error("Error creating book:", err);
+      if (err.message && err.message.includes("Failed to fetch")) {
+        alert("Unable to connect to server. Please make sure the backend is running.");
       }
     } finally {
       setIsLoading(false);
@@ -34,13 +57,31 @@ export default function StoryDisplay() {
       setIsLoading(true);
       const res = await fetch(`${API_BASE}/api/story/next`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ prompt: input, bookId, idx: chapterIdx }),
       });
+      
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      // Check if response is JSON before parsing
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
+
       const data = await res.json();
       setStory((prev) => (prev ? prev + "\n\n" : "") + (data.story || ""));
       setChapterIdx((prev) => prev + 1);
       setInput("");
+    } catch (err) {
+      console.error("Error continuing story:", err);
+      if (err.message && err.message.includes("Failed to fetch")) {
+        alert("Unable to connect to server. Please make sure the backend is running.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -50,12 +91,28 @@ export default function StoryDisplay() {
     <div className="min-h-full flex items-start sm:items-center justify-center py-10 sm:py-16">
       <div className="w-full max-w-3xl px-4 sm:px-6">
         <div className="text-center mb-6 sm:mb-8">
-          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-gray-900">
-            Storytime with Dan-AI
-          </h1>
-          <p className="mt-2 text-gray-600">
-            Generate and continue stories with AI. Craft the next scene below.
-          </p>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex-1"></div>
+            <div className="flex-1">
+              <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-gray-900">
+                Storytime with Dan-AI
+              </h1>
+              <p className="mt-2 text-gray-600">
+                Generate and continue stories with AI. Craft the next scene below.
+              </p>
+            </div>
+            <div className="flex-1 flex justify-end">
+              <div className="text-right">
+                <p className="text-sm text-gray-600">{user?.email}</p>
+                <button
+                  onClick={onLogout}
+                  className="text-sm text-gray-500 hover:text-gray-700 mt-1"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="card p-5 sm:p-6">

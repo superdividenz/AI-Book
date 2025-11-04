@@ -1,8 +1,12 @@
 import express from "express";
 import { supabase } from "../utils/supabase.js";
 import { generateChatCompletion } from "../utils/llm.js";
+import { authenticateUser } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// All story routes require authentication
+router.use(authenticateUser);
 
 router.post("/next", async (req, res) => {
   const { prompt, bookId, idx } = req.body;
