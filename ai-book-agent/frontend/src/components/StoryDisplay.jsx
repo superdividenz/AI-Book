@@ -1,4 +1,13 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import {
+  speak,
+  stop,
+  isSpeaking,
+  supportsTTS,
+  loadVoices,
+  getVoices,
+  curateVoices,
+} from "../utils/tts";
 
 export default function StoryDisplay({ accessToken, user, onLogout }) {
   const [story, setStory] = useState("");
@@ -7,6 +16,11 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
   const [bookTitle, setBookTitle] = useState("");
   const [bookId, setBookId] = useState(null);
   const [chapterIdx, setChapterIdx] = useState(1);
+  const [speaking, setSpeaking] = useState(false);
+  const [books, setBooks] = useState([]);
+  const [isBooksLoading, setIsBooksLoading] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [voiceURI, setVoiceURI] = useState("");
 
   const API_BASE = "http://localhost:5050";
 
@@ -14,6 +28,93 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
     "Content-Type": "application/json",
     Authorization: `Bearer ${accessToken}`,
   });
+
+  const fetchBooks = async () => {
+    try {
+      setIsBooksLoading(true);
+      const res = await fetch(`${API_BASE}/api/books`, {
+        headers: getAuthHeaders(),
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      setBooks(Array.isArray(data.books) ? data.books : []);
+    } catch (err) {
+      console.error("Error fetching books:", err);
+    } finally {
+      setIsBooksLoading(false);
+    }
+  };
+
+  const loadBookDetails = async (id) => {
+    if (!id) return;
+    try {
+      setIsLoading(true);
+      const res = await fetch(`${API_BASE}/api/books/${id}`, {
+        headers: getAuthHeaders(),
+      });
+
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      const title = data.book?.title || "";
+      const chapters = Array.isArray(data.chapters) ? data.chapters : [];
+      const combined = chapters
+        .sort((a, b) => (a.idx ?? 0) - (b.idx ?? 0))
+        .map((c) => c.content || "")
+        .join("\n\n");
+      setBookTitle(title);
+      setStory(combined);
+      const nextIdx = chapters.length
+        ? Math.max(...chapters.map((c) => c.idx || 0)) + 1
+        : 1;
+      setChapterIdx(nextIdx);
+    } catch (err) {
+      console.error("Error loading book:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // initial load of user's books
+    fetchBooks();
+    // load TTS voices
+    if (supportsTTS()) {
+      loadVoices().then((v) => {
+        const list = Array.isArray(v) ? v : getVoices();
+        const curated = curateVoices(list);
+        setVoices(curated);
+        const preferred = curated[0] || list[0];
+        if (preferred) setVoiceURI(preferred.voiceURI || preferred.name || "");
+      });
+    }
+    // Stop TTS when unmounting or when user logs out
+    return () => {
+      try {
+        stop();
+      } catch (_) {}
+    };
+  }, []);
 
   const handleCreateBook = async () => {
     if (!bookTitle.trim() || isLoading) return;
@@ -24,7 +125,7 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
         headers: getAuthHeaders(),
         body: JSON.stringify({ title: bookTitle.trim() }),
       });
-      
+
       if (res.status === 401) {
         onLogout();
         return;
@@ -44,7 +145,9 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
     } catch (err) {
       console.error("Error creating book:", err);
       if (err.message && err.message.includes("Failed to fetch")) {
-        alert("Unable to connect to server. Please make sure the backend is running.");
+        alert(
+          "Unable to connect to server. Please make sure the backend is running."
+        );
       }
     } finally {
       setIsLoading(false);
@@ -60,7 +163,7 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
         headers: getAuthHeaders(),
         body: JSON.stringify({ prompt: input, bookId, idx: chapterIdx }),
       });
-      
+
       if (res.status === 401) {
         onLogout();
         return;
@@ -80,10 +183,48 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
     } catch (err) {
       console.error("Error continuing story:", err);
       if (err.message && err.message.includes("Failed to fetch")) {
-        alert("Unable to connect to server. Please make sure the backend is running.");
+        alert(
+          "Unable to connect to server. Please make sure the backend is running."
+        );
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleToggleRead = async () => {
+    if (!story.trim()) return;
+    if (!supportsTTS()) {
+      alert("Sorry, your browser doesn't support text-to-speech.");
+      return;
+    }
+
+    if (speaking || isSpeaking()) {
+      stop();
+      setSpeaking(false);
+      return;
+    }
+
+    setSpeaking(true);
+    try {
+      await speak(story, { voiceURI: voiceURI || undefined });
+    } catch (e) {
+      console.error("TTS error:", e);
+    } finally {
+      setSpeaking(false);
+    }
+  };
+
+  const handleSelectBook = async (e) => {
+    const id = e.target.value || null;
+    setBookId(id);
+    if (id) {
+      await loadBookDetails(id);
+    } else {
+      // Reset state when no book selected
+      setBookTitle("");
+      setStory("");
+      setChapterIdx(1);
     }
   };
 
@@ -98,7 +239,8 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
                 Storytime with Dan-AI
               </h1>
               <p className="mt-2 text-gray-600">
-                Generate and continue stories with AI. Craft the next scene below.
+                Generate and continue stories with AI. Craft the next scene
+                below.
               </p>
             </div>
             <div className="flex-1 flex justify-end">
@@ -118,7 +260,37 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
         <div className="card p-5 sm:p-6">
           <div className="mb-4 sm:mb-5">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Book title
+              Pick an existing book
+            </label>
+            <div className="flex gap-3">
+              <select
+                value={bookId || ""}
+                onChange={handleSelectBook}
+                className="textarea"
+              >
+                <option value="">— Select a book —</option>
+                {books.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={fetchBooks}
+                className="btn-primary whitespace-nowrap"
+              >
+                {isBooksLoading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+            {bookId && (
+              <p className="mt-2 text-xs text-gray-500">Book ID: {bookId}</p>
+            )}
+          </div>
+
+          <div className="mb-4 sm:mb-5">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Or create a new book
             </label>
             <div className="flex gap-3">
               <input
@@ -130,16 +302,17 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
               />
               <button
                 type="button"
-                onClick={handleCreateBook}
+                onClick={async () => {
+                  await handleCreateBook();
+                  // refresh list and select the new book
+                  await fetchBooks();
+                }}
                 disabled={isLoading || !bookTitle.trim()}
                 className="btn-primary whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {bookId ? "Book Created" : "Start Book"}
+                Start Book
               </button>
             </div>
-            {bookId && (
-              <p className="mt-2 text-xs text-gray-500">Book ID: {bookId}</p>
-            )}
           </div>
           <div className="mb-4 sm:mb-5">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -191,10 +364,56 @@ export default function StoryDisplay({ accessToken, user, onLogout }) {
               )}
             </button>
           </div>
+          {!bookId && (
+            <p className="mt-2 text-xs text-gray-500">
+              Tip: Select or create a book to save new chapters to your
+              database.
+            </p>
+          )}
         </div>
 
         <div className="mt-6 sm:mt-8 card p-5 sm:p-6">
-          <h2 className="text-lg font-medium text-gray-900 mb-3">Story</h2>
+          <div className="flex items-center justify-between mb-3 gap-3">
+            <h2 className="text-lg font-medium text-gray-900">
+              Story{bookTitle ? ` — ${bookTitle}` : ""}
+            </h2>
+            <div className="flex items-center gap-2">
+              {supportsTTS() && (
+                <select
+                  className="textarea py-2 px-3"
+                  value={voiceURI}
+                  onChange={(e) => setVoiceURI(e.target.value)}
+                  title="Choose a voice"
+                >
+                  {voices.length === 0 ? (
+                    <option value="">Loading voices…</option>
+                  ) : (
+                    voices.map((v) => (
+                      <option
+                        key={v.voiceURI || v.name}
+                        value={v.voiceURI || v.name}
+                      >
+                        {`${v.lang || ""} — ${v.name}`}
+                      </option>
+                    ))
+                  )}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={handleToggleRead}
+                disabled={!story.trim()}
+                className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
+                title={
+                  supportsTTS()
+                    ? "Let the browser read the story aloud"
+                    : "TTS not supported"
+                }
+              >
+                {speaking || isSpeaking() ? "Stop reading" : "Read it to me"}
+              </button>
+            </div>
+          </div>
           <pre className="whitespace-pre-wrap text-gray-800 text-base leading-7 min-h-[4rem]">
             {story || "Your story will appear here..."}
           </pre>
